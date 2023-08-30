@@ -1,20 +1,19 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pickle
-
-from absl import app
-from absl import flags
-
+import glob
 from matplotlib import animation
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 from pyevtk.hl import pointsToVTK
 
-flags.DEFINE_string("rollout_dir", None, help="Directory where rollout.pkl are located")
-flags.DEFINE_string("rollout_name", None, help="Name of rollout `.pkl` file")
-flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.")
-flags.DEFINE_enum("output_mode", "gif", ["gif", "vtk"], help="Type of render output")
+# flags.DEFINE_string("rollout_dir", None, help="Directory where rollout.pkl are located")
+# flags.DEFINE_string("rollout_name", None, help="Name of rollout `.pkl` file")
+# flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.")
+# flags.DEFINE_enum("output_mode", "gif", ["gif", "vtk"], help="Type of render output")
 
-FLAGS = flags.FLAGS
+# FLAGS = flags.FLAGS
 
 TYPE_TO_COLOR = {
     1: "red",  # for droplet
@@ -195,25 +194,34 @@ class Render():
         print(f"vtk saved to: {self.output_dir}{self.output_name}...")
 
 
-def main(_):
-    if not FLAGS.rollout_dir:
-        raise ValueError("A `rollout_dir` must be passed.")
-    if not FLAGS.rollout_name:
-        raise ValueError("A `rollout_name`must be passed.")
+def main(flags):
+    input_name = f"{flags['exp_id']}_rollout_*_{flags['checkpoint_step']}_*.pkl"
+    fnames = glob.glob(flags["rollout_dir"] + input_name)
+    if len(fnames) == 0:
+        raise FileNotFoundError(f"No file found for {flags['rollout_dir']}{input_name}")
+    
+    for fname in fnames:
+        render = Render(input_dir=flags["rollout_dir"], input_name=fname.split("/")[-1].split(".")[0]+'.'+fname.split("/")[-1].split(".")[1])
 
-    render = Render(input_dir=FLAGS.rollout_dir, input_name=FLAGS.rollout_name)
-
-    if FLAGS.output_mode == "gif":
-        render.render_gif_animation(
-            point_size=1,
-            timestep_stride=FLAGS.step_stride,
-            vertical_camera_angle=20,
-            viewpoint_rotation=0.3
-        )
-    elif FLAGS.output_mode == "vtk":
-        render.write_vtk()
+        if flags["output_mode"] == "gif":
+            render.render_gif_animation(
+                point_size=1,
+                timestep_stride=flags["step_stride"],
+                vertical_camera_angle=20,
+                viewpoint_rotation=0.3
+            )
+        elif flags["output_mode"] == "vtk":
+            render.write_vtk()
 
 
 if __name__ == '__main__':
-    app.run(main)
+    dataset = "WaterDropSample"
+    myflags = {}
+    myflags["rollout_dir"] = f"../results/rollouts/{dataset}/"
+    myflags["exp_id"] = 0
+    myflags["example_id"] = 0
+    myflags["checkpoint_step"] = 8000
+    myflags["output_mode"] = "gif" # gif or vtk
+    myflags["step_stride"] = 3
+    main(myflags)
 

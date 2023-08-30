@@ -15,6 +15,20 @@ def setup(rank, world_size):
                                          rank=rank,
                                          world_size=world_size,
                                         )
+    
+def all_reduce(tensor, op="sum"):
+    """Applies all-reduce operation.
+    
+    Args:
+        tensor (torch.Tensor): Tensor to apply all-reduce operation.
+    """
+    if op == "sum":
+        torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+    elif op == "mean":
+        torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+        tensor /= torch.distributed.get_world_size()
+    else:
+        raise NotImplementedError("Unsupported all-reduce operation.")
 
 def cleanup():
     """
