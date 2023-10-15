@@ -152,3 +152,4 @@ cython_debug/
 *.pt
 *.pkl
 *.gif
+*.npy
