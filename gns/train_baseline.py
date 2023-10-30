@@ -49,8 +49,8 @@ parser.add_argument('--nvalid_steps', type=int, default=int(2000), help='Number 
 parser.add_argument('--nsave_steps', type=int, default=int(2000), help='Number of steps at which to save the model.')
 parser.add_argument('--nlog_steps', type=int, default=int(100), help='Number of steps at which to log the model.')
 # Learning rate parameters
-parser.add_argument('--lr_init', type=float, default=0.001, help='Initial learning rate.')
-parser.add_argument('--lr_decay', type=float, default=0.0001, help='Learning rate decay.')
+parser.add_argument('--lr_init', type=float, default=0.01, help='Initial learning rate.')
+parser.add_argument('--lr_decay', type=float, default=0.001, help='Learning rate decay.')
 parser.add_argument('--lr_decay_steps', type=int, default=int(5e6), help='Learning rate decay steps.')
 parser.add_argument('--log_path', type=str, default=default_res_dir, help='The path for saving logs.')
 parser.add_argument('--is_cuda', type=bool, default=False, help='Whether to use cuda.')
