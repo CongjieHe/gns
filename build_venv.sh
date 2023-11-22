@@ -1,6 +1,6 @@
 #!/bin/bash
 
-module reset 
+module reset
 
 # create env
 # ---------
@@ -11,7 +11,7 @@ source venv/bin/activate
 
 which python
 python -m pip install --upgrade pip
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip3 install torch==2.0.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.0.0+cu118.html
 python -m pip install -r requirements.txt
 
@@ -22,7 +22,7 @@ echo 'which python -> venv'
 which python
 
 echo 'test_pytorch.py -> random tensor'
-python test/test_pytorch.py 
+python test/test_pytorch.py
 
 echo 'test_pytorch_cuda_gpu.py -> True if GPU'
 python test/test_pytorch_cuda_gpu.py
