@@ -281,6 +281,8 @@ def train(flags):
 
   print(f"rank = {rank}, cuda = {is_cuda}")
   not_reached_nsteps = True
+  losses = []
+  steps = []
   try:
     while not_reached_nsteps:
       if is_cuda:
@@ -338,6 +340,8 @@ def train(flags):
           if is_cuda:
             torch.distributed.reduce(loss, dst=0, op=torch.distributed.ReduceOp.SUM)
           logger.info(f'Training step: {step}/{flags["ntraining_steps"]}. Loss: {loss / world_size}.')
+          losses.append((loss / world_size).cpu().detach().numpy())
+          steps.append(step)
             
         if is_main:
           # Save model state
@@ -355,6 +359,12 @@ def train(flags):
           break
 
         step += 1
+        
+    import matplotlib.pyplot as plt
+    plt.plot(steps, losses)
+    plt.xlabel("steps")
+    plt.ylabel("loss")
+    plt.savefig(f'{flags["model_path"]}{flags["exp_id"]}-loss.png')
 
   except KeyboardInterrupt:
     pass
@@ -399,15 +409,35 @@ def _get_simulator(
       },
   }
 
-  simulator = learned_simulator.LearnedSimulator(
+  # simulator = learned_simulator.LearnedSimulator(
+  #     particle_dimensions=metadata['dim'],
+  #     nnode_in=37 if metadata['dim'] == 3 else 30,
+  #     nedge_in=metadata['dim'] + 1,
+  #     latent_dim=128,
+  #     nmessage_passing_steps=5,
+  #     nmlp_layers=2,
+  #     mlp_hidden_dim=128,
+  #     boundaries=np.array(metadata['bounds']),
+  #     normalization_stats=normalization_stats,
+  #     nparticle_types=NUM_PARTICLE_TYPES,
+  #     particle_type_embedding_size=16,
+  #     device=device)
+  cylinder = learned_simulator.Cylinder(
+                metadata['geometry']['axis_start'], 
+                metadata['geometry']['axis_end'], 
+                metadata['geometry']['radius']
+              )
+  
+  simulator = learned_simulator.LearnedCylinderSimulator(
       particle_dimensions=metadata['dim'],
-      nnode_in=37 if metadata['dim'] == 3 else 30,
+      nnode_in=34 if metadata['dim'] == 3 else 30,
       nedge_in=metadata['dim'] + 1,
       latent_dim=128,
       nmessage_passing_steps=5,
       nmlp_layers=2,
       mlp_hidden_dim=128,
-      boundaries=np.array(metadata['bounds']),
+      cylinder=cylinder,
+      radius=metadata['geometry']['radius'],
       normalization_stats=normalization_stats,
       nparticle_types=NUM_PARTICLE_TYPES,
       particle_type_embedding_size=16,
