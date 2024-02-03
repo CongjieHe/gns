@@ -362,6 +362,7 @@ class LearnedCylinderSimulator(nn.Module):
           nmlp_layers: int,
           mlp_hidden_dim: int,
           radius: float,
+          dt: float,
           cylinder: Cylinder,
           normalization_stats: Dict,
           nparticle_types: int,
@@ -393,6 +394,7 @@ class LearnedCylinderSimulator(nn.Module):
     self._normalization_stats = normalization_stats
     self._nparticle_types = nparticle_types
     self._radius = radius
+    self.dt = dt
     # self._connectivity_radius = 1.0
 
     # Particle type embedding has shape (9, 16)
@@ -415,28 +417,59 @@ class LearnedCylinderSimulator(nn.Module):
     """Forward hook runs on class instantiation"""
     pass
   
+  # def calculate_wall_distance(self, timestep_data, drum):
+  #     # Assuming timestep_data.position, drum.point1, drum.point2, drum.vector_norm, and drum.vector are all PyTorch tensors
+  #     device = timestep_data.device
+  #     drum.point1 = drum.point1.to(device)
+  #     drum.point2 = drum.point2.to(device)
+  #     drum.vector_norm = drum.vector_norm.to(device)
+  #     drum.vector = drum.vector.to(device)
+  #     # print(timestep_data.shape, drum.point1.shape, drum.point2.shape, drum.vector_norm.shape, drum.vector.shape)
+  #     # exit()
+  #     # print((timestep_data - drum.point1).shape, drum.vector_norm.shape)
+  #     dist_end_1 = torch.matmul(timestep_data - drum.point1, drum.vector_norm)
+  #     dist_end_2 = torch.matmul(drum.point2 - timestep_data, drum.vector_norm)
+  #     radial_dist_to_wall = torch.norm(torch.cross(timestep_data - drum.point1, drum.vector.unsqueeze(0)), dim=1) / torch.norm(drum.vector)
+  #     # print(dist_end_1.shape, dist_end_2.shape, radial_dist_to_wall.shape)
+
+  #     all_dists = torch.stack([dist_end_1, dist_end_2, radial_dist_to_wall]).T
+  #     # print(all_dists.shape)
+
+  #     # dist_to_wall, _ = torch.min(all_dists, dim=1)
+  #     # print(dist_to_wall.shape)
+  #     # exit()
+
+  #     return all_dists
   def calculate_wall_distance(self, timestep_data, drum):
-      # Assuming timestep_data.position, drum.point1, drum.point2, drum.vector_norm, and drum.vector are all PyTorch tensors
       device = timestep_data.device
       drum.point1 = drum.point1.to(device)
       drum.point2 = drum.point2.to(device)
-      drum.vector_norm = drum.vector_norm.to(device)
       drum.vector = drum.vector.to(device)
-      # print(timestep_data.shape, drum.point1.shape, drum.point2.shape, drum.vector_norm.shape, drum.vector.shape)
-      # exit()
-      # print((timestep_data - drum.point1).shape, drum.vector_norm.shape)
-      dist_end_1 = torch.matmul(timestep_data - drum.point1, drum.vector_norm)
-      dist_end_2 = torch.matmul(drum.point2 - timestep_data, drum.vector_norm)
-      radial_dist_to_wall = torch.norm(torch.cross(timestep_data - drum.point1, drum.vector.unsqueeze(0)), dim=1) / torch.norm(drum.vector)
-      # print(dist_end_1.shape, dist_end_2.shape, radial_dist_to_wall.shape)
 
-      all_dists = torch.stack([dist_end_1, dist_end_2, radial_dist_to_wall]).T
-      # print(all_dists.shape)
+      # Vector from each P to C2
+      pc2 = drum.point2 - timestep_data
 
-      # dist_to_wall, _ = torch.min(all_dists, dim=1)
-      # print(dist_to_wall.shape)
-      # exit()
+      # Project PC2 onto C1C2 to find its component along the cylinder's axis
+      dot_product = torch.sum(pc2 * drum.vector, dim=1)
+      C1C2_norm_squared = torch.sum(drum.vector * drum.vector)
+      proj_PC2_C1C2 = (dot_product / C1C2_norm_squared).unsqueeze(1) * drum.vector
 
+      # Perpendicular distance from each P to the cylinder's axis
+      perp_distance_to_axis = torch.norm((timestep_data - drum.point1) - 
+                                         (torch.sum((timestep_data - drum.point1) * drum.vector, dim=1, keepdim=True) / C1C2_norm_squared) * drum.vector, dim=1)
+
+      # Distance to the curved wall, ensuring it's non-negative
+      distance_to_wall = torch.clamp(drum.radius - perp_distance_to_axis, min=0)
+
+      # Distance to the "up" face (C2 face)
+      distance_to_up_face = torch.sqrt(torch.norm(pc2, dim=1)**2 - torch.norm(proj_PC2_C1C2, dim=1)**2)
+
+      # Distance to the "down" face (C1 face) - similar calculation
+      distance_to_down_face = torch.sqrt(torch.norm(timestep_data - drum.point1, dim=1)**2 - 
+                                         torch.norm((timestep_data - drum.point1) - 
+                                                    (torch.sum((timestep_data - drum.point1) * drum.vector, dim=1, keepdim=True) / C1C2_norm_squared) * drum.vector, dim=1)**2)
+
+      all_dists = torch.stack([distance_to_wall, distance_to_up_face, distance_to_down_face]).T
       return all_dists
 
   def _encoder_preprocessor(
@@ -495,6 +528,7 @@ class LearnedCylinderSimulator(nn.Module):
     normalized_wail_distance = torch.clamp(wall_distance / self._radius, -1., 1.)
     # print(normalized_wail_distance.shape)
     node_features.append(normalized_wail_distance)
+    # 15 + 3 = 18
 
     # Particle type
     if self._nparticle_types > 1:
@@ -560,8 +594,8 @@ class LearnedCylinderSimulator(nn.Module):
     most_recent_velocity = most_recent_position - position_sequence[:, -2]
 
     # TODO: Fix dt
-    new_velocity = most_recent_velocity + acceleration  # * dt = 1
-    new_position = most_recent_position + new_velocity  # * dt = 1
+    new_velocity = most_recent_velocity + acceleration * self.dt
+    new_position = most_recent_position + new_velocity * self.dt
     return new_position
 
   def predict_positions(

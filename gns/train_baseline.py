@@ -60,14 +60,15 @@ args = parser.parse_args()
 Stats = collections.namedtuple('Stats', ['mean', 'std'])
 
 INPUT_SEQUENCE_LENGTH = 6  # So we can calculate the last 5 velocities.
-NUM_PARTICLE_TYPES = 9
-KINEMATIC_PARTICLE_ID = 3
+NUM_PARTICLE_TYPES = 1
+KINEMATIC_PARTICLE_ID = -1
 
 def rollout(
-        simulator: learned_simulator.LearnedSimulator,
+        simulator: learned_simulator.LearnedCylinderSimulator,
         position: torch.tensor,
+        label: torch.tensor,
         particle_types: torch.tensor,
-        n_particles_per_example: torch.tensor,
+        edge_index: torch.tensor,
         nsteps: int,
         device):
   """Rolls out a trajectory by applying the model in sequence.
@@ -77,9 +78,11 @@ def rollout(
     features: Torch tensor features.
     nsteps: Number of steps.
   """
+  # print(position.shape)
   initial_positions = position[:, :INPUT_SEQUENCE_LENGTH]
-  ground_truth_positions = position[:, INPUT_SEQUENCE_LENGTH:]
+  ground_truth_positions = label
 
+  print(label.shape)
   current_positions = initial_positions
   predictions = []
 
@@ -87,16 +90,16 @@ def rollout(
     # Get next position with shape (nnodes, dim)
     next_position = simulator.predict_positions(
         current_positions,
-        nparticles_per_example=[n_particles_per_example],
         particle_types=particle_types,
+        edge_index=edge_index
     )
 
     # Update kinematic particles from prescribed trajectory.
     kinematic_mask = (particle_types == KINEMATIC_PARTICLE_ID).clone().detach().to(device)
-    next_position_ground_truth = ground_truth_positions[:, step]
+    # next_position_ground_truth = ground_truth_positions[:, step]
     kinematic_mask = kinematic_mask.bool()[:, None].expand(-1, current_positions.shape[-1])
-    next_position = torch.where(
-        kinematic_mask, next_position_ground_truth, next_position)
+    # next_position = torch.where(
+    #     kinematic_mask, next_position_ground_truth, next_position)
     predictions.append(next_position)
 
     # Shift `current_positions`, removing the oldest position in the sequence
@@ -106,9 +109,10 @@ def rollout(
 
   # Predictions with shape (time, nnodes, dim)
   predictions = torch.stack(predictions)
-  ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
+  # print(predictions.shape)
+  # ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
 
-  loss = (predictions - ground_truth_positions) ** 2
+  loss = (predictions[-1] - ground_truth_positions) ** 2
 
   output_dict = {
       'initial_positions': initial_positions.permute(1, 0, 2).cpu().numpy(),
@@ -146,19 +150,28 @@ def predict(flags):
   # Use `valid`` set for eval mode if not use `test`
   split = 'test' if flags["mode"] == 'rollout' else 'valid'
 
-  ds = data_loader.get_data_loader_by_trajectories(path=f'{flags["data_path"]}{split}.npz')
+  ds = distribute.get_data_distributed_dataloader_mono_baseline(path=flags["data_path"],
+                                                                      input_length_sequence=INPUT_SEQUENCE_LENGTH,
+                                                                      batch_size=flags["batch_size"],
+                                                                      train_ratio=flags["train_ratio"],
+                                                                      shuffle=False
+                                                                      )
 
   eval_loss = []
   with torch.no_grad():
-    for example_i, (positions, particle_type, n_particles_per_example) in enumerate(ds):
+    for example_i, ((positions, particle_type, n_particles_per_example, edge_index), labels) in enumerate(ds):
+      if example_i > 0:
+        break
       positions.to(device)
       particle_type.to(device)
-      n_particles_per_example = torch.tensor([int(n_particles_per_example)], dtype=torch.int32).to(device)
+      # n_particles_per_example = torch.tensor([int(n_particles_per_example)], dtype=torch.int32).to(device)
 
       nsteps = metadata['sequence_length'] - INPUT_SEQUENCE_LENGTH
       # Predict example rollout
-      example_rollout, loss = rollout(simulator, positions.to(device), particle_type.to(device),
-                                      n_particles_per_example.to(device), nsteps, device)
+      example_rollout, loss = rollout(simulator, positions.to(device), labels.to(device), particle_type.to(device),
+                                      edge_index.to(device), nsteps, device)
+      # example_rollout = rollout(simulator, positions.to(device), labels.to(device), particle_type.to(device),
+      #                                 edge_index.to(device), nsteps, device)
 
       example_rollout['metadata'] = metadata
       print("Predicting example {} loss: {}".format(example_i, loss.mean()))
@@ -267,7 +280,12 @@ def train(flags):
   simulator.to(device)
 
   if is_cuda:
-    dl = distribute.get_data_distributed_dataloader_SAG_Mill_baseline(path=flags["data_path"],
+    # dl = distribute.get_data_distributed_dataloader_SAG_Mill_baseline(path=flags["data_path"],
+    #                                                                   input_length_sequence=INPUT_SEQUENCE_LENGTH,
+    #                                                                   batch_size=flags["batch_size"],
+    #                                                                   train_ratio=flags["train_ratio"],
+    #                                                                   )
+    dl = distribute.get_data_distributed_dataloader_mono_baseline(path=flags["data_path"],
                                                                       input_length_sequence=INPUT_SEQUENCE_LENGTH,
                                                                       batch_size=flags["batch_size"],
                                                                       train_ratio=flags["train_ratio"],
@@ -283,6 +301,7 @@ def train(flags):
   not_reached_nsteps = True
   losses = []
   steps = []
+  # all_acc = []
   try:
     while not_reached_nsteps:
       if is_cuda:
@@ -309,6 +328,7 @@ def train(flags):
               position_sequence=position.to(device),
               particle_types=particle_type.to(device),
               edge_index=edge_index.to(device))
+          # all_acc.append(acc.cpu().detach().numpy())
         else:
           pred_acc, target_acc = simulator.predict_accelerations(
             next_positions=labels,
@@ -365,6 +385,9 @@ def train(flags):
     plt.xlabel("steps")
     plt.ylabel("loss")
     plt.savefig(f'{flags["model_path"]}{flags["exp_id"]}-loss.png')
+    
+    # all_acc = np.concatenate(all_acc, axis=0)
+    # pickle.dump(all_acc, open(f'{flags["model_path"]}{flags["exp_id"]}-acc.pkl', 'wb'))
 
   except KeyboardInterrupt:
     pass
@@ -430,7 +453,7 @@ def _get_simulator(
   
   simulator = learned_simulator.LearnedCylinderSimulator(
       particle_dimensions=metadata['dim'],
-      nnode_in=34 if metadata['dim'] == 3 else 30,
+      nnode_in=18 if metadata['dim'] == 3 else 30,
       nedge_in=metadata['dim'] + 1,
       latent_dim=128,
       nmessage_passing_steps=5,
@@ -438,6 +461,7 @@ def _get_simulator(
       mlp_hidden_dim=128,
       cylinder=cylinder,
       radius=metadata['geometry']['radius'],
+      dt=metadata['dt'],
       normalization_stats=normalization_stats,
       nparticle_types=NUM_PARTICLE_TYPES,
       particle_type_embedding_size=16,
@@ -469,7 +493,7 @@ def main():
   myflags["nlog_steps"] = args.nlog_steps
   myflags["is_cuda"] = args.is_cuda
   myflags["log_path"] = args.log_path
-  myflags["train_ratio"] = 0.6
+  myflags["train_ratio"] = 0.8
   myflags = utils.init_distritubed_mode(myflags)
 
   # Read metadata
@@ -485,6 +509,36 @@ def main():
     if myflags["is_cuda"]:
       torch.distributed.barrier()
     predict(myflags)
+  
+  # elif args.mode in ['rollout']:
+  #   if myflags["is_cuda"]:
+  #     torch.distributed.barrier()
+  #   data = np.load('/mnt/raid0sata1/jysc/gnn_data/Train_Data/all_pos.npz')
+  #   device = myflags["device"]
+  #   metadata = reading_utils.read_metadata(myflags["data_path"])
+  #   simulator = _get_simulator(metadata, myflags["noise_std"], myflags["noise_std"], device)
+
+  #   # Load simulator
+  #   if os.path.exists(myflags["model_path"] + myflags["model_file"]):
+  #     simulator.load(myflags["model_path"] + myflags["model_file"])
+  #   else:
+  #     raise FileNotFoundError(f'Model file {myflags["model_path"] + myflags["model_file"]} not found.')
+  #   simulator.to(device)
+  #   simulator.eval()
+
+  #   # Output path
+  #   if not os.path.exists(myflags["output_path"]):
+  #     os.makedirs(myflags["output_path"])
+    
+  #   output_dict, _ = rollout(simulator, 
+  #           torch.tensor(data['all_pos']).to(torch.float32).contiguous(), 
+  #           torch.full((data['all_pos'].shape[0],), 0, dtype=int).contiguous(), 
+  #           data['all_pos'].shape[0], 
+  #           metadata['sequence_length'] - INPUT_SEQUENCE_LENGTH, 
+  #           device)
+    
+  #   pickle.dump(output_dict, open(f'{myflags["output_path"]}rollout.pkl', 'wb'))
+    
 
 if __name__ == '__main__':
   main()

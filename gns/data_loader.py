@@ -323,6 +323,61 @@ class SAGMillSamplesDataset_Baseline(torch.utils.data.Dataset):
         edge_index = self._edge_index[idx+self._input_length_sequence-1]
         
         return ((positions, particle_type, n_particles_per_example, edge_index), label)
+
+class MonoSamplesDataset_Baseline(torch.utils.data.Dataset):
+    def __init__(self, path, input_length_sequence, train_ratio=0.3):
+        super().__init__()
+        # load SAG Mill particle dataset - p4p
+        timestemp_list = glob.glob(osp.join(path, "Rot_drum_mono_*.p4p"))
+        timestemp_list = list(map(lambda x: re.split(r'[/_.]', x)[-2], timestemp_list))
+        timestemp_list = sorted(timestemp_list, key=int)
+        timestemp_list = timestemp_list[4:]
+        
+        timestemp_list = timestemp_list[:int(len(timestemp_list) * train_ratio)] 
+        
+        self._dimension = 3
+        self._input_length_sequence = input_length_sequence
+        self._data_lengths = len(timestemp_list) - self._input_length_sequence - 1
+            
+        self._position = []
+        self._edge_index = []
+        self._particle_type = None
+
+        columns = ['ID', 'GROUP', 'VOLUME', 'MASS', 'POS_X', 'POS_Y','POS_Z', 'VEL_X', 'VEL_Y',
+                   'VEL_Z', 'AVG_VEL_X', 'AVG_VEL_Y', 'AVG_VEL_Z', 'AVG_ACC_X', 'AVG_ACC_Y', 'AVG_ACC_Z',
+                   'ANG_VEL_X', 'ANG_VEL_Y', 'ANG_VEL_Z', 'TORQ_X', 'TORQ_Y', 'TORQ_Z']
+        for i in timestemp_list:
+            data = pd.read_csv(osp.join(path, "Rot_drum_mono_{}.p4p".format(i)), skiprows=3, sep=" ", header=None)
+            data.columns = columns
+            self._position.append(data[['POS_X', 'POS_Y', 'POS_Z']].to_numpy())
+            
+        data = pd.read_csv(osp.join(path, "Rot_drum_mono_{}.p4p".format(timestemp_list[-1])), skiprows=3, sep=" ", header=None)
+        data.columns = columns
+        self._particle_type = data['GROUP'].to_numpy()
+              
+        columns = ['P1', 'P2', 'CPOS_X', 'CPOS_Y', 'CPOS_Z', 'F_X', 'F_Y', 'F_Z', 'FN_X',
+                   'FN_Y', 'FN_Z', 'FT_X', 'FT_Y', 'FT_Z', 'OVLP_N']
+        for i in timestemp_list:
+            data = pd.read_csv(osp.join(path, "Rot_drum_mono_{}.p4c".format(i)), skiprows=3, sep=" ", header=None)
+            data.columns = columns
+            data['P1'] = data['P1'] - 1
+            data['P2'] = data['P2'] - 1
+            self._edge_index.append(data[['P1', 'P2']].to_numpy().T)
+            
+        
+    def __len__(self):
+        return self._data_lengths
+    
+    def __getitem__(self, idx):
+        positions = self._position[idx:idx+self._input_length_sequence]
+        positions = np.stack(positions, axis=0)
+        positions = np.transpose(positions, (1, 0, 2)) # nparticles, input_sequence_length, dimension
+        particle_type = self._particle_type
+        n_particles_per_example = len(particle_type)
+        label = self._position[idx+self._input_length_sequence]
+        edge_index = self._edge_index[idx+self._input_length_sequence-1]
+        
+        return ((positions, particle_type, n_particles_per_example, edge_index), label)
     
 def get_data_loader_SAG_Mill_baseline(path, input_length_sequence, batch_size, train_ratio, shuffle=True):
     """Returns a data loader for the dataset.
